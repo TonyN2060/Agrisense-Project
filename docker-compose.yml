@@ -1,0 +1,159 @@
+# ==============================================================================
+# AgriSense ML Module - Docker Compose Configuration
+#
+# Services:
+# - api: FastAPI prediction service
+# - postgres: PostgreSQL database
+# - redis: Redis cache
+# - prometheus: Metrics collection
+# ==============================================================================
+
+version: '3.8'
+
+services:
+  # ============================================================================
+  # AgriSense ML API Service
+  # ============================================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: agrisense-api
+    environment:
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-agrisense-secret-change-me}
+      - MODEL_DIR=/app/models
+      - DATABASE_URL=postgresql://agrisense:agrisense@postgres:5432/agrisense
+      - REDIS_URL=redis://redis:6379/0
+      - UVICORN_WORKERS=4
+      - LOG_LEVEL=INFO
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models:ro
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - agrisense-network
+
+  # ============================================================================
+  # PostgreSQL Database
+  # ============================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: agrisense-postgres
+    environment:
+      - POSTGRES_USER=agrisense
+      - POSTGRES_PASSWORD=agrisense
+      - POSTGRES_DB=agrisense
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agrisense"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - agrisense-network
+
+  # ============================================================================
+  # Redis Cache
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: agrisense-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - agrisense-network
+
+  # ============================================================================
+  # Prometheus (Metrics)
+  # ============================================================================
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: agrisense-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - agrisense-network
+
+  # ============================================================================
+  # Grafana (Dashboards) - Optional
+  # ============================================================================
+  grafana:
+    image: grafana/grafana:10.0.0
+    container_name: agrisense-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=agrisense
+      - GF_INSTALL_PLUGINS=grafana-clock-panel
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - agrisense-network
+    profiles:
+      - monitoring
+
+# ==============================================================================
+# Networks
+# ==============================================================================
+networks:
+  agrisense-network:
+    driver: bridge
+
+# ==============================================================================
+# Volumes
+# ==============================================================================
+volumes:
+  postgres-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:

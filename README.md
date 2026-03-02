@@ -427,6 +427,3 @@ mypy .
 
 Proprietary - AgriSense Team
 
-## Authors
-
-AgriSense ML Team - 2024
